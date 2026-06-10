@@ -24,9 +24,9 @@ let FleetController = class FleetController {
         this.authService = authService;
         this.fleetService = fleetService;
     }
-    async findDrones(authorization) {
+    async findDrones(authorization, page, pageSize, search) {
         const user = await (0, auth_context_1.getAuthUser)(this.authService, authorization);
-        return this.fleetService.findDrones(user);
+        return this.fleetService.findDrones(user, { page, pageSize, search });
     }
     async findDrone(id, authorization) {
         const user = await (0, auth_context_1.getAuthUser)(this.authService, authorization);
@@ -36,13 +36,24 @@ let FleetController = class FleetController {
         const user = await (0, auth_context_1.getAuthUser)(this.authService, authorization);
         return this.fleetService.createDrone(user, body);
     }
+    async updateDrone(id, body, authorization) {
+        const user = await (0, auth_context_1.getAuthUser)(this.authService, authorization);
+        return this.fleetService.updateDrone(user, id, body);
+    }
+    async updateDroneStatus(id, status, authorization) {
+        const user = await (0, auth_context_1.getAuthUser)(this.authService, authorization);
+        return this.fleetService.updateDroneStatus(user, id, status);
+    }
 };
 exports.FleetController = FleetController;
 __decorate([
     (0, common_1.Get)('drones'),
     __param(0, (0, common_1.Headers)('authorization')),
+    __param(1, (0, common_1.Query)('page')),
+    __param(2, (0, common_1.Query)('pageSize')),
+    __param(3, (0, common_1.Query)('search')),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [String]),
+    __metadata("design:paramtypes", [String, String, String, String]),
     __metadata("design:returntype", Promise)
 ], FleetController.prototype, "findDrones", null);
 __decorate([
@@ -61,6 +72,24 @@ __decorate([
     __metadata("design:paramtypes", [Object, String]),
     __metadata("design:returntype", Promise)
 ], FleetController.prototype, "createDrone", null);
+__decorate([
+    (0, common_1.Patch)('drones/:id'),
+    __param(0, (0, common_1.Param)('id')),
+    __param(1, (0, common_1.Body)()),
+    __param(2, (0, common_1.Headers)('authorization')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, Object, String]),
+    __metadata("design:returntype", Promise)
+], FleetController.prototype, "updateDrone", null);
+__decorate([
+    (0, common_1.Patch)('drones/:id/status'),
+    __param(0, (0, common_1.Param)('id')),
+    __param(1, (0, common_1.Body)('status')),
+    __param(2, (0, common_1.Headers)('authorization')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, String, String]),
+    __metadata("design:returntype", Promise)
+], FleetController.prototype, "updateDroneStatus", null);
 exports.FleetController = FleetController = __decorate([
     (0, common_1.Controller)('fleet'),
     __metadata("design:paramtypes", [auth_service_1.AuthService,
