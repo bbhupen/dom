@@ -1,0 +1,73 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum UserRole {
+  SUPER_ADMIN
+  ORG_OWNER
+  ORG_ADMIN
+  PILOT
+  MAINTENANCE
+  CLIENT
+}
+
+enum DroneStatus {
+  ACTIVE
+  UNDER_MAINTENANCE
+  GROUNDED
+  RETIRED
+}
+
+model Organization {
+  id        String   @id @default(uuid())
+  name      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  users User[]
+  drones Drone[]
+}
+
+model User {
+  id             String       @id @default(uuid())
+  organizationId String
+  name           String
+  email          String       @unique
+  role           UserRole
+  passwordHash   String
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@index([role])
+}
+
+model Drone {
+  id               String      @id @default(uuid())
+  organizationId   String
+  name             String
+  manufacturer     String
+  model            String
+  serialNumber     String
+  uin              String?
+  category         String?
+  weightKg         Float?
+  payloadCapacityKg Float?
+  status           DroneStatus @default(ACTIVE)
+  totalFlightHours Float       @default(0)
+  notes            String?
+  createdAt        DateTime    @default(now())
+  updatedAt        DateTime    @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, serialNumber])
+  @@index([organizationId])
+  @@index([status])
+}
