@@ -7,9 +7,10 @@ import { MissionsModule } from './missions/missions.module';
 import { OperationsModule } from './operations/operations.module';
 import { PilotsModule } from './pilots/pilots.module';
 import { RequestsModule } from './requests/requests.module';
+import { ServicesModule } from './services/services.module';
 
 @Module({
-  imports: [AuthModule, RequestsModule, MissionsModule, FleetModule, PilotsModule, OperationsModule],
+  imports: [AuthModule, RequestsModule, MissionsModule, FleetModule, PilotsModule, OperationsModule, ServicesModule],
   controllers: [AppController],
   providers: [AppService],
 })

@@ -22,6 +22,58 @@ enum DroneStatus {
   RETIRED
 }
 
+enum ServiceStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum ServiceCategory {
+  MAPPING_SURVEY
+  INSPECTION
+  AGRICULTURE
+  MEDIA
+  MONITORING
+  CUSTOM
+}
+
+enum ServicePricingUnit {
+  PER_PROJECT
+  PER_HOUR
+  PER_ACRE
+  PER_DAY
+}
+
+enum RequestSource {
+  CUSTOMER_CREATED
+  ADMIN_CREATED
+  WEBSITE_FORM
+  WHATSAPP
+  API
+  PARTNER
+}
+
+enum RequestStatus {
+  DRAFT
+  SUBMITTED
+  UNDER_REVIEW
+  MORE_INFO_REQUIRED
+  QUOTE_SENT
+  QUOTE_ACCEPTED
+  QUOTE_REJECTED
+  SCHEDULED
+  ASSIGNED
+  IN_PROGRESS
+  COMPLETED
+  REPORT_DELIVERED
+  CANCELLED
+  REJECTED
+}
+
+enum RequestUrgency {
+  NORMAL
+  URGENT
+}
+
 model Organization {
   id        String   @id @default(uuid())
   name      String
@@ -30,6 +82,8 @@ model Organization {
 
   users User[]
   drones Drone[]
+  services Service[]
+  requests ServiceRequest[]
 }
 
 model User {
@@ -70,4 +124,57 @@ model Drone {
   @@unique([organizationId, serialNumber])
   @@index([organizationId])
   @@index([status])
+}
+
+model Service {
+  id                       String             @id @default(uuid())
+  organizationId           String
+  name                     String
+  category                 ServiceCategory
+  description              String?
+  status                   ServiceStatus      @default(ACTIVE)
+  pricingUnit              ServicePricingUnit @default(PER_PROJECT)
+  basePrice                Float?
+  currency                 String             @default("INR")
+  estimatedDurationMinutes Int?
+  deliverables             String?
+  notes                    String?
+  createdAt                DateTime           @default(now())
+  updatedAt                DateTime           @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  requests ServiceRequest[]
+
+  @@unique([organizationId, name])
+  @@index([organizationId])
+  @@index([category])
+  @@index([status])
+}
+
+model ServiceRequest {
+  id             String         @id @default(uuid())
+  organizationId String
+  serviceId      String?
+  source         RequestSource  @default(CUSTOMER_CREATED)
+  customerName   String
+  contactPhone   String
+  serviceType    String
+  siteLocation   String
+  preferredDate  DateTime?
+  description    String
+  urgency        RequestUrgency @default(NORMAL)
+  status         RequestStatus  @default(SUBMITTED)
+  quoteAmount    Float?
+  notes          String?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  service      Service?     @relation(fields: [serviceId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId])
+  @@index([serviceId])
+  @@index([status])
+  @@index([source])
+  @@index([urgency])
 }
