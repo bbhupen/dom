@@ -33,4 +33,17 @@ export class AuthController {
   async me(@Headers('authorization') authorization?: string) {
     return getAuthUser(this.authService, authorization);
   }
+
+  @Post('create-pilot')
+  async createPilot(
+    @Body() body: { name?: string; email?: string; password?: string },
+    @Headers('authorization') authorization?: string,
+  ) {
+    const user = await getAuthUser(this.authService, authorization);
+    return this.authService.createPilotAccount(user, {
+      name: body.name ?? '',
+      email: body.email ?? '',
+      password: body.password ?? '',
+    });
+  }
 }

@@ -8,6 +8,12 @@ export type RequestSource =
 
 export type RequestStatus =
   | 'draft'
+  | 'pending'
+  | 'price_calculated'
+  | 'invoice_ready'
+  | 'assigned_to_pilot'
+  | 'pilot_accepted'
+  | 'drone_allocated'
   | 'submitted'
   | 'under_review'
   | 'more_info_required'
@@ -17,8 +23,15 @@ export type RequestStatus =
   | 'scheduled'
   | 'assigned'
   | 'in_progress'
+  | 'operation_completed'
+  | 'report_submitted'
+  | 'invoice_generated'
+  | 'invoice_reviewed'
+  | 'invoice_sent'
+  | 'payment_received'
   | 'completed'
   | 'report_delivered'
+  | 'closed'
   | 'cancelled'
   | 'rejected';
 
@@ -62,11 +75,29 @@ export interface ServiceRequest {
   contactPhone: string;
   serviceType: string;
   siteLocation: string;
+  siteLat?: number;
+  siteLng?: number;
   preferredDate: string;
   description: string;
   urgency: 'normal' | 'urgent';
   status: RequestStatus;
   quoteAmount?: number;
+  invoiceNumber?: string;
+  invoiceReady: boolean;
+  assignedPilotId?: string;
+  assignedDroneId?: string;
+  notes?: string;
+  pilotAcceptedAt?: string;
+  droneAllocatedAt?: string;
+  operationStartedAt?: string;
+  operationCompletedAt?: string;
+  reportNotes?: string;
+  reportSubmittedAt?: string;
+  invoiceGeneratedAt?: string;
+  invoiceReviewedAt?: string;
+  invoiceSentAt?: string;
+  paymentReceivedAt?: string;
+  closedAt?: string;
   createdAt: string;
 }
 

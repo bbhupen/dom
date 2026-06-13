@@ -1,6 +1,6 @@
 import 'dotenv/config';
 import { randomBytes, scryptSync } from 'crypto';
-import { PrismaClient, RequestSource, RequestStatus, RequestUrgency, ServiceCategory, ServicePricingUnit, UserRole } from '@prisma/client';
+import { PilotStatus, PrismaClient, RequestSource, RequestStatus, RequestUrgency, ServiceCategory, ServicePricingUnit, UserRole } from '@prisma/client';
 import { PrismaPg } from '@prisma/adapter-pg';
 
 const databaseUrl = process.env.DATABASE_URL;
@@ -146,6 +146,49 @@ async function main() {
     });
   }
 
+  const defaultPilots = [
+    {
+      name: 'Rohan Mehta',
+      phone: '+91 90000 11111',
+      email: 'rohan.pilot@example.com',
+      licenseNumber: 'RPC-2026-001',
+      status: PilotStatus.AVAILABLE,
+      notes: 'Mapping and inspection specialist.',
+    },
+    {
+      name: 'Ananya Rao',
+      phone: '+91 90000 22222',
+      email: 'ananya.pilot@example.com',
+      licenseNumber: 'RPC-2026-002',
+      status: PilotStatus.AVAILABLE,
+      notes: 'Media capture and monitoring missions.',
+    },
+    {
+      name: 'Kabir Singh',
+      phone: '+91 90000 33333',
+      email: 'kabir.pilot@example.com',
+      licenseNumber: 'RPC-2026-003',
+      status: PilotStatus.OFF_DUTY,
+      notes: 'Available for weekend scheduling.',
+    },
+  ];
+
+  for (const pilot of defaultPilots) {
+    await prisma.pilot.upsert({
+      where: {
+        organizationId_phone: {
+          organizationId: organization.id,
+          phone: pilot.phone,
+        },
+      },
+      update: pilot,
+      create: {
+        ...pilot,
+        organizationId: organization.id,
+      },
+    });
+  }
+
   const assetInspectionService = await prisma.service.findFirst({
     where: { organizationId: organization.id, name: 'Asset Inspection' },
   });
@@ -163,9 +206,11 @@ async function main() {
       preferredDate: new Date('2026-06-18T00:00:00.000Z'),
       description: 'Inspect 20 MW solar plant and submit panel anomaly report.',
       urgency: RequestUrgency.NORMAL,
-      status: RequestStatus.UNDER_REVIEW,
+      status: RequestStatus.PENDING,
       source: RequestSource.CUSTOMER_CREATED,
       quoteAmount: 45000,
+      invoiceNumber: 'INV-DOM-1001',
+      invoiceReady: false,
     },
     {
       customerName: 'Metro Infra Works',
@@ -176,9 +221,11 @@ async function main() {
       preferredDate: new Date('2026-06-20T00:00:00.000Z'),
       description: 'Monthly progress capture for elevated corridor package.',
       urgency: RequestUrgency.URGENT,
-      status: RequestStatus.QUOTE_SENT,
+      status: RequestStatus.INVOICE_READY,
       source: RequestSource.ADMIN_CREATED,
       quoteAmount: 28000,
+      invoiceNumber: 'INV-DOM-1002',
+      invoiceReady: true,
     },
   ];
 
@@ -209,6 +256,7 @@ async function main() {
   console.log(`Seeded super admin user: ${seedConfig.superAdminEmail}`);
   console.log(`Seeded organization owner user: ${seedConfig.orgOwnerEmail}`);
   console.log(`Seeded services: ${defaultServices.length}`);
+  console.log(`Seeded pilots: ${defaultPilots.length}`);
   console.log(`Seeded requests: ${defaultRequests.length}`);
 }
 

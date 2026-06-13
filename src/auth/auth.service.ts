@@ -83,6 +83,38 @@ export class AuthService {
     };
   }
 
+  async createPilotAccount(
+    admin: AuthUser,
+    input: { name: string; email: string; password: string },
+  ) {
+    if (!['super_admin', 'org_owner', 'org_admin'].includes(admin.role)) {
+      throw new BadRequestException('Only admins can create pilot accounts');
+    }
+
+    const name = input.name.trim();
+    const normalizedEmail = input.email.trim().toLowerCase();
+    const password = input.password;
+
+    if (!name) throw new BadRequestException('Name is required');
+    if (!this.isValidEmail(normalizedEmail)) throw new BadRequestException('Valid email is required');
+    if (password.length < 8) throw new BadRequestException('Password must be at least 8 characters');
+
+    const existing = await this.prisma.user.findUnique({ where: { email: normalizedEmail } });
+    if (existing) throw new ConflictException('An account with this email already exists');
+
+    const user = await this.prisma.user.create({
+      data: {
+        organizationId: admin.organizationId,
+        name,
+        email: normalizedEmail,
+        role: UserRole.PILOT,
+        passwordHash: this.hashPassword(password),
+      },
+    });
+
+    return { id: user.id, name: user.name, email: user.email, role: 'pilot' };
+  }
+
   async verifyToken(token: string) {
     const [payloadBase64, signature] = token.split('.');
 

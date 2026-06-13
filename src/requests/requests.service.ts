@@ -1,5 +1,5 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
-import { Prisma, RequestSource, RequestStatus, RequestUrgency } from '@prisma/client';
+import { DroneStatus, PilotStatus, Prisma, RequestSource, RequestStatus, RequestUrgency } from '@prisma/client';
 import { AuthUser } from '../domain';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -10,11 +10,17 @@ type RequestInput = {
   contactPhone?: string;
   serviceType?: string;
   siteLocation?: string;
+  siteLat?: number;
+  siteLng?: number;
   preferredDate?: string;
   description?: string;
   urgency?: string;
   status?: string;
   quoteAmount?: number;
+  invoiceNumber?: string;
+  invoiceReady?: boolean;
+  assignedPilotId?: string;
+  assignedDroneId?: string;
   notes?: string;
 };
 
@@ -30,6 +36,7 @@ export class RequestsService {
       search?: string;
       status?: string;
       urgency?: string;
+      assignedToMe?: string;
     } = {},
   ) {
     this.assertOrganizationRequestAccess(user);
@@ -38,8 +45,18 @@ export class RequestsService {
     const search = options.search?.trim();
     const status = options.status ? this.parseRequestStatus(options.status) : undefined;
     const urgency = options.urgency ? this.parseRequestUrgency(options.urgency) : undefined;
+    // pilots can only see their own assigned requests — resolve User → Pilot by email
+    let pilotFilter: Prisma.ServiceRequestWhereInput = {};
+    if (user.role === 'pilot' || options.assignedToMe === 'true') {
+      const pilotProfile = await this.prisma.pilot.findFirst({
+        where: { organizationId: user.organizationId, email: user.email },
+        select: { id: true },
+      });
+      pilotFilter = { assignedPilotId: pilotProfile?.id ?? '__no_match__' };
+    }
     const where: Prisma.ServiceRequestWhereInput = {
       organizationId: user.organizationId,
+      ...pilotFilter,
       ...(status ? { status } : {}),
       ...(urgency ? { urgency } : {}),
       ...(search
@@ -56,26 +73,29 @@ export class RequestsService {
         : {}),
     };
 
-    const [requests, total, openCount, urgentCount, quotedCount] = await Promise.all([
+    const [requests, total, pendingCount, invoiceReadyCount, assignedCount, urgentCount, inProgressCount] = await Promise.all([
       this.prisma.serviceRequest.findMany({
         where,
-        include: { service: true },
+        include: { service: true, assignedPilot: true, assignedDrone: true },
         orderBy: { createdAt: 'desc' },
         skip: (page - 1) * pageSize,
         take: pageSize,
       }),
       this.prisma.serviceRequest.count({ where }),
       this.prisma.serviceRequest.count({
-        where: {
-          organizationId: user.organizationId,
-          status: { in: [RequestStatus.SUBMITTED, RequestStatus.UNDER_REVIEW, RequestStatus.MORE_INFO_REQUIRED] },
-        },
+        where: { organizationId: user.organizationId, status: RequestStatus.PENDING },
+      }),
+      this.prisma.serviceRequest.count({
+        where: { organizationId: user.organizationId, invoiceReady: true },
+      }),
+      this.prisma.serviceRequest.count({
+        where: { organizationId: user.organizationId, status: RequestStatus.ASSIGNED_TO_PILOT },
       }),
       this.prisma.serviceRequest.count({
         where: { organizationId: user.organizationId, urgency: RequestUrgency.URGENT },
       }),
       this.prisma.serviceRequest.count({
-        where: { organizationId: user.organizationId, status: RequestStatus.QUOTE_SENT },
+        where: { organizationId: user.organizationId, status: RequestStatus.IN_PROGRESS },
       }),
     ]);
 
@@ -88,9 +108,13 @@ export class RequestsService {
         totalPages: Math.max(1, Math.ceil(total / pageSize)),
       },
       summary: {
-        openCount,
+        openCount: pendingCount,
+        pendingCount,
+        inProgressCount,
+        invoiceReadyCount,
+        assignedCount,
         urgentCount,
-        quotedCount,
+        quotedCount: invoiceReadyCount,
       },
     };
   }
@@ -103,7 +127,7 @@ export class RequestsService {
         id,
         organizationId: user.organizationId,
       },
-      include: { service: true },
+      include: { service: true, assignedPilot: true, assignedDrone: true },
     });
 
     if (!request) {
@@ -121,7 +145,7 @@ export class RequestsService {
         ...data,
         organizationId: user.organizationId,
       },
-      include: { service: true },
+      include: { service: true, assignedPilot: true, assignedDrone: true },
     });
 
     return this.toResponse(request);
@@ -134,7 +158,7 @@ export class RequestsService {
     const request = await this.prisma.serviceRequest.update({
       where: { id },
       data,
-      include: { service: true },
+      include: { service: true, assignedPilot: true, assignedDrone: true },
     });
 
     return this.toResponse(request);
@@ -148,15 +172,305 @@ export class RequestsService {
     const request = await this.prisma.serviceRequest.update({
       where: { id },
       data: { status: requestStatus },
-      include: { service: true },
+      include: { service: true, assignedPilot: true, assignedDrone: true },
+    });
+
+    return this.toResponse(request);
+  }
+
+  async assignPilot(user: AuthUser, id: string, pilotId: string) {
+    this.assertAdminAccess(user);
+    const existing = await this.findOne(user, id);
+
+    if (!['pending', 'price_calculated'].includes(existing.status as string)) {
+      throw new BadRequestException('Request must be in pending or price_calculated status to assign a pilot');
+    }
+
+    const pilot = await this.prisma.pilot.findFirst({
+      where: { id: pilotId, organizationId: user.organizationId, status: { not: 'SUSPENDED' } },
+    });
+
+    if (!pilot) {
+      throw new BadRequestException('Selected pilot was not found or is suspended');
+    }
+
+    const request = await this.prisma.serviceRequest.update({
+      where: { id },
+      data: { assignedPilotId: pilotId, status: RequestStatus.ASSIGNED_TO_PILOT },
+      include: { service: true, assignedPilot: true, assignedDrone: true },
+    });
+
+    return this.toResponse(request);
+  }
+
+  async pilotAcceptWithDrone(user: AuthUser, id: string, droneId: string) {
+    if (user.role !== 'pilot') {
+      throw new ForbiddenException('Only pilots can accept requests');
+    }
+
+    const existing = await this.prisma.serviceRequest.findFirst({
+      where: { id, organizationId: user.organizationId },
+      include: { service: true, assignedPilot: true, assignedDrone: true },
+    });
+
+    if (!existing) throw new NotFoundException(`Request ${id} was not found`);
+
+    if (existing.status !== RequestStatus.ASSIGNED_TO_PILOT) {
+      throw new BadRequestException('Request must be in assigned_to_pilot status for pilot to accept');
+    }
+
+    const pilotProfile = await this.prisma.pilot.findFirst({
+      where: { organizationId: user.organizationId, email: user.email },
+      select: { id: true },
+    });
+
+    const drone = await this.prisma.drone.findFirst({
+      where: {
+        id: droneId,
+        organizationId: user.organizationId,
+        status: 'ACTIVE',
+        // must be in this pilot's inventory (or unassigned if pilot has no profile yet)
+        ...(pilotProfile ? { pilotId: pilotProfile.id } : {}),
+      },
+    });
+
+    if (!drone) {
+      throw new BadRequestException('Selected drone was not found, is not active, or is not in your inventory');
+    }
+
+    const now = new Date();
+    const request = await this.prisma.serviceRequest.update({
+      where: { id },
+      data: {
+        assignedDroneId: droneId,
+        status: RequestStatus.DRONE_ALLOCATED,
+        pilotAcceptedAt: now,
+        droneAllocatedAt: now,
+      },
+      include: { service: true, assignedPilot: true, assignedDrone: true },
+    });
+
+    return this.toResponse(request);
+  }
+
+  async startOperation(user: AuthUser, id: string) {
+    if (!['pilot', 'org_admin', 'org_owner', 'super_admin'].includes(user.role)) {
+      throw new ForbiddenException('Only pilots or admins can start an operation');
+    }
+
+    const existing = await this.prisma.serviceRequest.findFirst({
+      where: { id, organizationId: user.organizationId },
+      include: { service: true, assignedPilot: true, assignedDrone: true },
+    });
+
+    if (!existing) throw new NotFoundException(`Request ${id} was not found`);
+
+    if (existing.status !== RequestStatus.DRONE_ALLOCATED) {
+      throw new BadRequestException('Drone must be allocated before starting the operation');
+    }
+
+    const request = await this.prisma.serviceRequest.update({
+      where: { id },
+      data: { status: RequestStatus.IN_PROGRESS, operationStartedAt: new Date() },
+      include: { service: true, assignedPilot: true, assignedDrone: true },
+    });
+
+    return this.toResponse(request);
+  }
+
+  async completeOperation(user: AuthUser, id: string) {
+    if (!['pilot', 'org_admin', 'org_owner', 'super_admin'].includes(user.role)) {
+      throw new ForbiddenException('Only pilots or admins can complete an operation');
+    }
+
+    const existing = await this.prisma.serviceRequest.findFirst({
+      where: { id, organizationId: user.organizationId },
+      include: { service: true, assignedPilot: true, assignedDrone: true },
+    });
+
+    if (!existing) throw new NotFoundException(`Request ${id} was not found`);
+
+    if (existing.status !== RequestStatus.IN_PROGRESS) {
+      throw new BadRequestException('Operation must be in progress to complete it');
+    }
+
+    const request = await this.prisma.serviceRequest.update({
+      where: { id },
+      data: { status: RequestStatus.OPERATION_COMPLETED, operationCompletedAt: new Date() },
+      include: { service: true, assignedPilot: true, assignedDrone: true },
+    });
+
+    return this.toResponse(request);
+  }
+
+  async submitReport(user: AuthUser, id: string, reportNotes: string) {
+    if (!['pilot', 'org_admin', 'org_owner', 'super_admin'].includes(user.role)) {
+      throw new ForbiddenException('Only pilots or admins can submit a report');
+    }
+
+    const existing = await this.prisma.serviceRequest.findFirst({
+      where: { id, organizationId: user.organizationId },
+      include: { service: true, assignedPilot: true, assignedDrone: true },
+    });
+
+    if (!existing) throw new NotFoundException(`Request ${id} was not found`);
+
+    if (existing.status !== RequestStatus.OPERATION_COMPLETED) {
+      throw new BadRequestException('Operation must be completed before submitting a report');
+    }
+
+    if (!reportNotes?.trim()) {
+      throw new BadRequestException('Report notes are required');
+    }
+
+    const request = await this.prisma.serviceRequest.update({
+      where: { id },
+      data: {
+        status: RequestStatus.REPORT_SUBMITTED,
+        reportNotes: reportNotes.trim(),
+        reportSubmittedAt: new Date(),
+      },
+      include: { service: true, assignedPilot: true, assignedDrone: true },
+    });
+
+    return this.toResponse(request);
+  }
+
+  async generateInvoice(user: AuthUser, id: string, invoiceNumber: string, quoteAmount?: number) {
+    this.assertAdminAccess(user);
+
+    const existing = await this.prisma.serviceRequest.findFirst({
+      where: { id, organizationId: user.organizationId },
+      include: { service: true, assignedPilot: true, assignedDrone: true },
+    });
+
+    if (!existing) throw new NotFoundException(`Request ${id} was not found`);
+
+    if (existing.status !== RequestStatus.REPORT_SUBMITTED) {
+      throw new BadRequestException('Report must be submitted before generating an invoice');
+    }
+
+    if (!invoiceNumber?.trim()) {
+      throw new BadRequestException('Invoice number is required');
+    }
+
+    const request = await this.prisma.serviceRequest.update({
+      where: { id },
+      data: {
+        status: RequestStatus.INVOICE_GENERATED,
+        invoiceNumber: invoiceNumber.trim(),
+        invoiceGeneratedAt: new Date(),
+        ...(quoteAmount !== undefined ? { quoteAmount: this.normalizeNumber(quoteAmount) } : {}),
+      },
+      include: { service: true, assignedPilot: true, assignedDrone: true },
+    });
+
+    return this.toResponse(request);
+  }
+
+  async reviewInvoice(user: AuthUser, id: string) {
+    if (!['org_owner', 'super_admin'].includes(user.role)) {
+      throw new ForbiddenException('Only the org owner can review invoices');
+    }
+
+    const existing = await this.prisma.serviceRequest.findFirst({
+      where: { id, organizationId: user.organizationId },
+      include: { service: true, assignedPilot: true, assignedDrone: true },
+    });
+
+    if (!existing) throw new NotFoundException(`Request ${id} was not found`);
+
+    if (existing.status !== RequestStatus.INVOICE_GENERATED) {
+      throw new BadRequestException('Invoice must be generated before it can be reviewed');
+    }
+
+    const request = await this.prisma.serviceRequest.update({
+      where: { id },
+      data: { status: RequestStatus.INVOICE_REVIEWED, invoiceReviewedAt: new Date() },
+      include: { service: true, assignedPilot: true, assignedDrone: true },
+    });
+
+    return this.toResponse(request);
+  }
+
+  async sendInvoice(user: AuthUser, id: string) {
+    this.assertAdminAccess(user);
+
+    const existing = await this.prisma.serviceRequest.findFirst({
+      where: { id, organizationId: user.organizationId },
+      include: { service: true, assignedPilot: true, assignedDrone: true },
+    });
+
+    if (!existing) throw new NotFoundException(`Request ${id} was not found`);
+
+    if (existing.status !== RequestStatus.INVOICE_REVIEWED) {
+      throw new BadRequestException('Invoice must be reviewed before it can be sent');
+    }
+
+    const request = await this.prisma.serviceRequest.update({
+      where: { id },
+      data: { status: RequestStatus.INVOICE_SENT, invoiceSentAt: new Date() },
+      include: { service: true, assignedPilot: true, assignedDrone: true },
+    });
+
+    return this.toResponse(request);
+  }
+
+  async recordPayment(user: AuthUser, id: string) {
+    this.assertAdminAccess(user);
+
+    const existing = await this.prisma.serviceRequest.findFirst({
+      where: { id, organizationId: user.organizationId },
+      include: { service: true, assignedPilot: true, assignedDrone: true },
+    });
+
+    if (!existing) throw new NotFoundException(`Request ${id} was not found`);
+
+    if (existing.status !== RequestStatus.INVOICE_SENT) {
+      throw new BadRequestException('Invoice must be sent before recording payment');
+    }
+
+    const request = await this.prisma.serviceRequest.update({
+      where: { id },
+      data: { status: RequestStatus.PAYMENT_RECEIVED, paymentReceivedAt: new Date() },
+      include: { service: true, assignedPilot: true, assignedDrone: true },
+    });
+
+    return this.toResponse(request);
+  }
+
+  async closeRequest(user: AuthUser, id: string) {
+    this.assertAdminAccess(user);
+
+    const existing = await this.prisma.serviceRequest.findFirst({
+      where: { id, organizationId: user.organizationId },
+      include: { service: true, assignedPilot: true, assignedDrone: true },
+    });
+
+    if (!existing) throw new NotFoundException(`Request ${id} was not found`);
+
+    if (existing.status !== RequestStatus.PAYMENT_RECEIVED) {
+      throw new BadRequestException('Payment must be received before closing the request');
+    }
+
+    const request = await this.prisma.serviceRequest.update({
+      where: { id },
+      data: { status: RequestStatus.CLOSED, closedAt: new Date() },
+      include: { service: true, assignedPilot: true, assignedDrone: true },
     });
 
     return this.toResponse(request);
   }
 
   private assertOrganizationRequestAccess(user: AuthUser) {
-    if (!['org_owner', 'org_admin', 'maintenance', 'pilot'].includes(user.role)) {
+    if (!['super_admin', 'org_owner', 'org_admin', 'maintenance', 'pilot'].includes(user.role)) {
       throw new ForbiddenException('This account cannot manage organization requests');
+    }
+  }
+
+  private assertAdminAccess(user: AuthUser) {
+    if (!['super_admin', 'org_owner', 'org_admin'].includes(user.role)) {
+      throw new ForbiddenException('Only admins can perform this action');
     }
   }
 
@@ -167,6 +481,8 @@ export class RequestsService {
     const description = input.description?.trim();
     let serviceType = input.serviceType?.trim();
     const serviceId = input.serviceId?.trim() || null;
+    const assignedPilotId = input.assignedPilotId?.trim() || null;
+    const assignedDroneId = input.assignedDroneId?.trim() || null;
 
     if (serviceId) {
       const service = await this.prisma.service.findFirst({
@@ -178,6 +494,34 @@ export class RequestsService {
       }
 
       serviceType = serviceType || service.name;
+    }
+
+    if (assignedPilotId) {
+      const pilot = await this.prisma.pilot.findFirst({
+        where: {
+          id: assignedPilotId,
+          organizationId: user.organizationId,
+          status: { not: PilotStatus.SUSPENDED },
+        },
+      });
+
+      if (!pilot) {
+        throw new BadRequestException('Selected pilot was not found');
+      }
+    }
+
+    if (assignedDroneId) {
+      const drone = await this.prisma.drone.findFirst({
+        where: {
+          id: assignedDroneId,
+          organizationId: user.organizationId,
+          status: DroneStatus.ACTIVE,
+        },
+      });
+
+      if (!drone) {
+        throw new BadRequestException('Selected drone was not found');
+      }
     }
 
     if (!customerName || !contactPhone || !siteLocation || !description) {
@@ -195,11 +539,17 @@ export class RequestsService {
       contactPhone,
       serviceType,
       siteLocation,
+      siteLat: input.siteLat ?? null,
+      siteLng: input.siteLng ?? null,
       preferredDate: this.parseDate(input.preferredDate),
       description,
       urgency: this.parseRequestUrgency(input.urgency ?? 'normal'),
-      status: input.status ? this.parseRequestStatus(input.status) : RequestStatus.SUBMITTED,
+      status: input.status ? this.parseRequestStatus(input.status) : RequestStatus.PENDING,
       quoteAmount: this.normalizeNumber(input.quoteAmount),
+      invoiceNumber: input.invoiceNumber?.trim() || null,
+      invoiceReady: input.invoiceReady ?? false,
+      assignedPilotId,
+      assignedDroneId,
       notes: input.notes?.trim() || null,
     };
   }
@@ -275,15 +625,34 @@ export class RequestsService {
     contactPhone: string;
     serviceType: string;
     siteLocation: string;
+    siteLat: number | null;
+    siteLng: number | null;
     preferredDate: Date | null;
     description: string;
     urgency: RequestUrgency;
     status: RequestStatus;
     quoteAmount: number | null;
+    invoiceNumber: string | null;
+    invoiceReady: boolean;
+    assignedPilotId: string | null;
+    assignedDroneId: string | null;
     notes: string | null;
+    pilotAcceptedAt: Date | null;
+    droneAllocatedAt: Date | null;
+    operationStartedAt: Date | null;
+    operationCompletedAt: Date | null;
+    reportNotes: string | null;
+    reportSubmittedAt: Date | null;
+    invoiceGeneratedAt: Date | null;
+    invoiceReviewedAt: Date | null;
+    invoiceSentAt: Date | null;
+    paymentReceivedAt: Date | null;
+    closedAt: Date | null;
     createdAt: Date;
     updatedAt: Date;
     service?: { id: string; name: string; category: string } | null;
+    assignedPilot?: { id: string; name: string; phone: string; status: PilotStatus } | null;
+    assignedDrone?: { id: string; name: string; model: string; status: DroneStatus } | null;
   }) {
     return {
       ...request,
@@ -295,6 +664,22 @@ export class RequestsService {
             id: request.service.id,
             name: request.service.name,
             category: request.service.category.toString().toLowerCase(),
+          }
+        : null,
+      assignedPilot: request.assignedPilot
+        ? {
+            id: request.assignedPilot.id,
+            name: request.assignedPilot.name,
+            phone: request.assignedPilot.phone,
+            status: request.assignedPilot.status.toString().toLowerCase(),
+          }
+        : null,
+      assignedDrone: request.assignedDrone
+        ? {
+            id: request.assignedDrone.id,
+            name: request.assignedDrone.name,
+            model: request.assignedDrone.model,
+            status: request.assignedDrone.status.toString().toLowerCase(),
           }
         : null,
     };

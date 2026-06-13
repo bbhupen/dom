@@ -22,6 +22,13 @@ enum DroneStatus {
   RETIRED
 }
 
+enum PilotStatus {
+  AVAILABLE
+  ASSIGNED
+  OFF_DUTY
+  SUSPENDED
+}
+
 enum ServiceStatus {
   ACTIVE
   INACTIVE
@@ -54,6 +61,12 @@ enum RequestSource {
 
 enum RequestStatus {
   DRAFT
+  PENDING
+  PRICE_CALCULATED
+  INVOICE_READY
+  ASSIGNED_TO_PILOT
+  PILOT_ACCEPTED
+  DRONE_ALLOCATED
   SUBMITTED
   UNDER_REVIEW
   MORE_INFO_REQUIRED
@@ -63,8 +76,15 @@ enum RequestStatus {
   SCHEDULED
   ASSIGNED
   IN_PROGRESS
+  OPERATION_COMPLETED
+  REPORT_SUBMITTED
+  INVOICE_GENERATED
+  INVOICE_REVIEWED
+  INVOICE_SENT
+  PAYMENT_RECEIVED
   COMPLETED
   REPORT_DELIVERED
+  CLOSED
   CANCELLED
   REJECTED
 }
@@ -82,8 +102,22 @@ model Organization {
 
   users User[]
   drones Drone[]
+  pilots Pilot[]
   services Service[]
+  customCategories CustomServiceCategory[]
   requests ServiceRequest[]
+}
+
+model CustomServiceCategory {
+  id             String   @id @default(uuid())
+  organizationId String
+  name           String
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, name])
+  @@index([organizationId])
 }
 
 model User {
@@ -119,9 +153,34 @@ model Drone {
   createdAt        DateTime    @default(now())
   updatedAt        DateTime    @updatedAt
 
-  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  pilotId          String?
+  organization     Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  inventoryPilot   Pilot?           @relation("PilotDroneInventory", fields: [pilotId], references: [id], onDelete: SetNull)
+  assignedRequests ServiceRequest[]
 
   @@unique([organizationId, serialNumber])
+  @@index([organizationId])
+  @@index([status])
+  @@index([pilotId])
+}
+
+model Pilot {
+  id             String      @id @default(uuid())
+  organizationId String
+  name           String
+  phone          String
+  email          String?
+  licenseNumber  String?
+  status         PilotStatus @default(AVAILABLE)
+  notes          String?
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  organization   Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  assignedRequests ServiceRequest[]
+  droneInventory Drone[]          @relation("PilotDroneInventory")
+
+  @@unique([organizationId, phone])
   @@index([organizationId])
   @@index([status])
 }
@@ -160,20 +219,41 @@ model ServiceRequest {
   contactPhone   String
   serviceType    String
   siteLocation   String
+  siteLat        Float?
+  siteLng        Float?
   preferredDate  DateTime?
   description    String
   urgency        RequestUrgency @default(NORMAL)
   status         RequestStatus  @default(SUBMITTED)
-  quoteAmount    Float?
-  notes          String?
-  createdAt      DateTime       @default(now())
-  updatedAt      DateTime       @updatedAt
+  quoteAmount          Float?
+  invoiceNumber        String?
+  invoiceReady         Boolean        @default(false)
+  assignedPilotId      String?
+  assignedDroneId      String?
+  notes                String?
+  pilotAcceptedAt      DateTime?
+  droneAllocatedAt     DateTime?
+  operationStartedAt   DateTime?
+  operationCompletedAt DateTime?
+  reportNotes          String?
+  reportSubmittedAt    DateTime?
+  invoiceGeneratedAt   DateTime?
+  invoiceReviewedAt    DateTime?
+  invoiceSentAt        DateTime?
+  paymentReceivedAt    DateTime?
+  closedAt             DateTime?
+  createdAt            DateTime       @default(now())
+  updatedAt            DateTime       @updatedAt
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   service      Service?     @relation(fields: [serviceId], references: [id], onDelete: SetNull)
+  assignedPilot Pilot?      @relation(fields: [assignedPilotId], references: [id], onDelete: SetNull)
+  assignedDrone Drone?      @relation(fields: [assignedDroneId], references: [id], onDelete: SetNull)
 
   @@index([organizationId])
   @@index([serviceId])
+  @@index([assignedPilotId])
+  @@index([assignedDroneId])
   @@index([status])
   @@index([source])
   @@index([urgency])

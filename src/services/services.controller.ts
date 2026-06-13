@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Headers, Param, Patch, Post, Query } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Headers, Param, Patch, Post, Query } from '@nestjs/common';
 import { getAuthUser } from '../auth/auth-context';
 import { AuthService } from '../auth/auth.service';
 import { ServicesService } from './services.service';
@@ -72,5 +72,29 @@ export class ServicesController {
   ) {
     const user = await getAuthUser(this.authService, authorization);
     return this.servicesService.updateServiceStatus(user, id, status);
+  }
+
+  @Get('custom-categories')
+  async listCustomCategories(@Headers('authorization') authorization?: string) {
+    const user = await getAuthUser(this.authService, authorization);
+    return this.servicesService.listCustomCategories(user);
+  }
+
+  @Post('custom-categories')
+  async createCustomCategory(
+    @Body('name') name: string,
+    @Headers('authorization') authorization?: string,
+  ) {
+    const user = await getAuthUser(this.authService, authorization);
+    return this.servicesService.createCustomCategory(user, name);
+  }
+
+  @Delete('custom-categories/:id')
+  async deleteCustomCategory(
+    @Param('id') id: string,
+    @Headers('authorization') authorization?: string,
+  ) {
+    const user = await getAuthUser(this.authService, authorization);
+    return this.servicesService.deleteCustomCategory(user, id);
   }
 }

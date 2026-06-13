@@ -1,0 +1,8 @@
+ALTER TABLE "Drone" ADD COLUMN IF NOT EXISTS "pilotId" TEXT;
+
+ALTER TABLE "Drone"
+  ADD CONSTRAINT "Drone_pilotId_fkey"
+  FOREIGN KEY ("pilotId") REFERENCES "Pilot"("id")
+  ON DELETE SET NULL ON UPDATE CASCADE;
+
+CREATE INDEX IF NOT EXISTS "Drone_pilotId_idx" ON "Drone"("pilotId");

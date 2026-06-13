@@ -16,9 +16,10 @@ export class FleetController {
     @Query('page') page?: string,
     @Query('pageSize') pageSize?: string,
     @Query('search') search?: string,
+    @Query('pilotId') pilotId?: string,
   ) {
     const user = await getAuthUser(this.authService, authorization);
-    return this.fleetService.findDrones(user, { page, pageSize, search });
+    return this.fleetService.findDrones(user, { page, pageSize, search, pilotId });
   }
 
   @Get('drones/:id')
@@ -76,5 +77,24 @@ export class FleetController {
   ) {
     const user = await getAuthUser(this.authService, authorization);
     return this.fleetService.updateDroneStatus(user, id, status);
+  }
+
+  @Post('drones/:id/assign-pilot')
+  async assignDroneToPilot(
+    @Param('id') id: string,
+    @Body('pilotId') pilotId: string,
+    @Headers('authorization') authorization?: string,
+  ) {
+    const user = await getAuthUser(this.authService, authorization);
+    return this.fleetService.assignDroneToPilot(user, id, pilotId);
+  }
+
+  @Post('drones/:id/unassign-pilot')
+  async unassignDroneFromPilot(
+    @Param('id') id: string,
+    @Headers('authorization') authorization?: string,
+  ) {
+    const user = await getAuthUser(this.authService, authorization);
+    return this.fleetService.unassignDroneFromPilot(user, id);
   }
 }

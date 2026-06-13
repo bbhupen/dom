@@ -13,15 +13,30 @@ export class FleetService {
       page?: string;
       pageSize?: string;
       search?: string;
+      pilotId?: string;
     } = {},
   ) {
-    this.assertOrganizationFleetAccess(user);
+    this.assertFleetReadAccess(user);
     const page = this.parsePositiveInt(options.page, 1);
     const pageSize = Math.min(this.parsePositiveInt(options.pageSize, 10), 100);
     const search = options.search?.trim();
     const searchStatus = search ? this.tryParseDroneStatus(search) : null;
+
+    // pilots can only see their own inventory
+    let pilotInventoryId: string | null | undefined;
+    if (user.role === 'pilot') {
+      const pilotProfile = await this.prisma.pilot.findFirst({
+        where: { organizationId: user.organizationId, email: user.email },
+        select: { id: true },
+      });
+      pilotInventoryId = pilotProfile?.id ?? null;
+    } else if (options.pilotId) {
+      pilotInventoryId = options.pilotId;
+    }
+
     const where: Prisma.DroneWhereInput = {
       organizationId: user.organizationId,
+      ...(pilotInventoryId !== undefined ? { pilotId: pilotInventoryId } : {}),
       ...(search
         ? {
             OR: [
@@ -40,6 +55,7 @@ export class FleetService {
     const [drones, total, activeCount, maintenanceCount, totalFlightHours] = await Promise.all([
       this.prisma.drone.findMany({
         where,
+        include: { inventoryPilot: { select: { id: true, name: true } } },
         orderBy: { createdAt: 'desc' },
         skip: (page - 1) * pageSize,
         take: pageSize,
@@ -74,13 +90,11 @@ export class FleetService {
   }
 
   async findDrone(user: AuthUser, id: string) {
-    this.assertOrganizationFleetAccess(user);
+    this.assertFleetReadAccess(user);
 
     const drone = await this.prisma.drone.findFirst({
-      where: {
-        id,
-        organizationId: user.organizationId,
-      },
+      where: { id, organizationId: user.organizationId },
+      include: { inventoryPilot: { select: { id: true, name: true } } },
     });
 
     if (!drone) {
@@ -88,6 +102,46 @@ export class FleetService {
     }
 
     return this.toResponse(drone);
+  }
+
+  async assignDroneToPilot(user: AuthUser, droneId: string, pilotId: string) {
+    this.assertAdminFleetAccess(user);
+
+    const drone = await this.prisma.drone.findFirst({
+      where: { id: droneId, organizationId: user.organizationId },
+    });
+    if (!drone) throw new NotFoundException(`Drone ${droneId} was not found`);
+    if (drone.pilotId) throw new BadRequestException('Drone is already assigned to a pilot — unassign it first');
+
+    const pilot = await this.prisma.pilot.findFirst({
+      where: { id: pilotId, organizationId: user.organizationId },
+    });
+    if (!pilot) throw new NotFoundException(`Pilot ${pilotId} was not found`);
+
+    const updated = await this.prisma.drone.update({
+      where: { id: droneId },
+      data: { pilotId },
+      include: { inventoryPilot: { select: { id: true, name: true } } },
+    });
+
+    return this.toResponse(updated);
+  }
+
+  async unassignDroneFromPilot(user: AuthUser, droneId: string) {
+    this.assertAdminFleetAccess(user);
+
+    const drone = await this.prisma.drone.findFirst({
+      where: { id: droneId, organizationId: user.organizationId },
+    });
+    if (!drone) throw new NotFoundException(`Drone ${droneId} was not found`);
+
+    const updated = await this.prisma.drone.update({
+      where: { id: droneId },
+      data: { pilotId: null },
+      include: { inventoryPilot: { select: { id: true, name: true } } },
+    });
+
+    return this.toResponse(updated);
   }
 
   async createDrone(
@@ -104,7 +158,7 @@ export class FleetService {
       notes?: string;
     },
   ) {
-    this.assertOrganizationFleetAccess(user);
+    this.assertAdminFleetAccess(user);
 
     const name = input.name?.trim();
     const manufacturer = input.manufacturer?.trim();
@@ -129,6 +183,7 @@ export class FleetService {
           payloadCapacityKg: this.normalizeNumber(input.payloadCapacityKg),
           notes: input.notes?.trim() || null,
         },
+        include: { inventoryPilot: { select: { id: true, name: true } } },
       });
 
       return this.toResponse(drone);
@@ -156,7 +211,7 @@ export class FleetService {
       notes?: string;
     },
   ) {
-    this.assertOrganizationFleetAccess(user);
+    this.assertAdminFleetAccess(user);
     await this.findDrone(user, id);
 
     const name = input.name?.trim();
@@ -182,6 +237,7 @@ export class FleetService {
           payloadCapacityKg: this.normalizeNumber(input.payloadCapacityKg),
           notes: input.notes?.trim() || null,
         },
+        include: { inventoryPilot: { select: { id: true, name: true } } },
       });
 
       return this.toResponse(drone);
@@ -195,21 +251,28 @@ export class FleetService {
   }
 
   async updateDroneStatus(user: AuthUser, id: string, status: string) {
-    this.assertOrganizationFleetAccess(user);
+    this.assertAdminFleetAccess(user);
     await this.findDrone(user, id);
 
     const droneStatus = this.parseDroneStatus(status);
     const drone = await this.prisma.drone.update({
       where: { id },
       data: { status: droneStatus },
+      include: { inventoryPilot: { select: { id: true, name: true } } },
     });
 
     return this.toResponse(drone);
   }
 
-  private assertOrganizationFleetAccess(user: AuthUser) {
-    if (!['org_owner', 'org_admin', 'maintenance'].includes(user.role)) {
-      throw new ForbiddenException('This account cannot manage organization fleet');
+  private assertFleetReadAccess(user: AuthUser) {
+    if (!['super_admin', 'org_owner', 'org_admin', 'maintenance', 'pilot'].includes(user.role)) {
+      throw new ForbiddenException('This account cannot access fleet');
+    }
+  }
+
+  private assertAdminFleetAccess(user: AuthUser) {
+    if (!['super_admin', 'org_owner', 'org_admin', 'maintenance'].includes(user.role)) {
+      throw new ForbiddenException('This account cannot manage fleet');
     }
   }
 
@@ -272,13 +335,16 @@ export class FleetService {
     payloadCapacityKg: number | null;
     status: DroneStatus;
     totalFlightHours: number;
+    pilotId: string | null;
     notes: string | null;
     createdAt: Date;
     updatedAt: Date;
+    inventoryPilot?: { id: string; name: string } | null;
   }) {
     return {
       ...drone,
       status: drone.status.toString().toLowerCase(),
+      inventoryPilot: drone.inventoryPilot ?? null,
     };
   }
 }

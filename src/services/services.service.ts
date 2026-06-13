@@ -243,6 +243,35 @@ export class ServicesService {
     return normalizedStatus as ServiceStatus;
   }
 
+  async listCustomCategories(user: AuthUser) {
+    return this.prisma.customServiceCategory.findMany({
+      where: { organizationId: user.organizationId },
+      orderBy: { createdAt: 'asc' },
+      select: { id: true, name: true },
+    });
+  }
+
+  async createCustomCategory(user: AuthUser, name: string) {
+    if (!name?.trim()) throw new BadRequestException('Category name is required.');
+    try {
+      return await this.prisma.customServiceCategory.create({
+        data: { organizationId: user.organizationId, name: name.trim() },
+        select: { id: true, name: true },
+      });
+    } catch (error) {
+      if (this.isUniqueConstraintError(error)) throw new ConflictException('A category with this name already exists.');
+      throw error;
+    }
+  }
+
+  async deleteCustomCategory(user: AuthUser, id: string) {
+    const cat = await this.prisma.customServiceCategory.findFirst({
+      where: { id, organizationId: user.organizationId },
+    });
+    if (!cat) throw new NotFoundException('Category not found.');
+    await this.prisma.customServiceCategory.delete({ where: { id } });
+  }
+
   private isUniqueConstraintError(error: unknown) {
     return error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002';
   }

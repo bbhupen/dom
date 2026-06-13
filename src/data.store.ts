@@ -36,6 +36,7 @@ export const serviceRequests: ServiceRequest[] = [
     urgency: 'normal',
     status: 'under_review',
     quoteAmount: 45000,
+    invoiceReady: false,
     createdAt: '2026-06-09T09:00:00.000Z',
   },
   {
@@ -50,6 +51,7 @@ export const serviceRequests: ServiceRequest[] = [
     urgency: 'urgent',
     status: 'quote_sent',
     quoteAmount: 28000,
+    invoiceReady: false,
     createdAt: '2026-06-09T10:30:00.000Z',
   },
 ];
