@@ -5,6 +5,7 @@ import { AppModule } from './app.module';
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
   app.enableCors();
+  app.setGlobalPrefix('api');
   app.use((req: any, res: any, next: any) => {
     const start = Date.now();
     const chunks: Buffer[] = [];
